@@ -1,0 +1,18 @@
+-- hw1_1  --done10/29
+SELECT COUNT(DISTINCT icd.subject_id)
+FROM 
+`physionet-data.mimiciv_hosp.diagnoses_icd` AS icd
+INNER JOIN 
+(SELECT subject_id, min(hospital_expire_flag) AS min_hosp_die_flag -- min_hosp_die_flag means first time left icu is dead or alive
+FROM `physionet-data.mimiciv_derived.icustay_detail` GROUP BY subject_id ) AS icu
+ON icd.subject_id = icu.subject_id
+INNER JOIN `physionet-data.mimiciv_hosp.patients` AS age
+ON icd.subject_id = age.subject_id
+INNER JOIN `physionet-data.mimiciv_derived.icustay_detail` AS icu2 ON icd.subject_id = icu2.subject_id
+WHERE (icd_code LIKE 'I26%' OR icd_code LIKE '4151%') AND (anchor_age >= 18)
+-- ans 2394
+AND (icu.min_hosp_die_flag = 0) -- 1:die in hospital, 0:not die in hospital
+-- ans die in hospital=260
+--AND age.gender = 'F' -- 'M':Male, 'F':Female
+--AND age.anchor_age BETWEEN 0 AND 20  -- age
+AND race LIKE 'WHITE%'-- OR race LIKE 'BLACK%' OR race LIKE 'HISPANIC%' OR race LIKE 'ASIAN%'  -- race

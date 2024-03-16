@@ -1,0 +1,66 @@
+-- hw1_2 -- 11/3/11/22
+SELECT COUNT(DISTINCT dialysis_age18.subject_id) 
+--SELECT DISTINCT dialysis_age18.subject_id, stay_id, icu_outtime, ordertime
+--SELECT DISTINCT dislysis_age18.subject_id, ordercategoryname, icd.icd_code, find_dialysis.starttime, icd.icd_version, age.anchor_age
+--select distinct subject_id
+FROM
+  (SELECT icd.subject_id, icd.icd_code, age.anchor_age, icu_detail_dialysis_first.hospital_expire_flag, icu_detail_dialysis_first.stay_id, icu_detail_dialysis_first.icu_outtime,icu_detail_dialysis_first.gender, icu_detail_dialysis_first.race , ordertype_Hemodialysis.ordertime, 
+  --ordertype_Hemodialysis
+  FROM
+ `physionet-data.mimiciv_hosp.diagnoses_icd` AS icd
+  INNER JOIN `physionet-data.mimiciv_derived.age` AS age
+  ON icd.subject_id = age.subject_id
+  INNER JOIN 
+    (SELECT subject_id, min(starttime) AS min_starttime FROM
+      (SELECT * FROM `physionet-data.mimiciv_icu.procedureevents` WHERE 
+      ordercategoryname LIKE '%Dialysis%') 
+    GROUP BY subject_id) AS find_min_starttime
+  ON icd.subject_id = find_min_starttime.subject_id
+-- min_starttime : the min starttime when dialysis or peritoneal dialysis happen
+-- starttime means the event starts
+  INNER JOIN `physionet-data.mimiciv_icu.procedureevents` AS find_dialysis
+  ON find_min_starttime.subject_id = find_dialysis.subject_id AND find_min_starttime.min_starttime = find_dialysis.starttime
+-- find_dialysis contains the data with dialysis or peritoneal dialysis from procedureevents
+
+
+  INNER JOIN 
+    (SELECT subject_id, min(starttime) AS min_starttime_dialysis FROM (SELECT * FROM`physionet-data.mimiciv_icu.procedureevents` WHERE 
+      ordercategoryname = 'Dialysis') 
+    GROUP BY subject_id) AS procedureevents_dialysis
+  ON icd.subject_id = procedureevents_dialysis.subject_id
+  INNER JOIN `physionet-data.mimiciv_icu.procedureevents` AS procedureevents_dialysis2 ON procedureevents_dialysis.subject_id = procedureevents_dialysis2.subject_id AND procedureevents_dialysis.min_starttime_dialysis = procedureevents_dialysis2.starttime
+  -- "the patients with dialysis" first in icu -> data
+  INNER JOIN `physionet-data.mimiciv_derived.icustay_detail` AS icu_detail_dialysis_first ON procedureevents_dialysis2.subject_id = icu_detail_dialysis_first.subject_id AND procedureevents_dialysis2.stay_id = icu_detail_dialysis_first.stay_id
+  -- stay_id of "the patients with dialysis" first in icu
+-- find first icu outtime end
+
+INNER JOIN (
+  SELECT * FROM `physionet-data.mimiciv_hosp.poe` AS poe  WHERE poe.order_type = 'Hemodialysis'
+)AS ordertype_Hemodialysis
+ON icu_detail_dialysis_first.subject_id = ordertype_Hemodialysis.subject_id 
+   AND icu_detail_dialysis_first.hadm_id = ordertype_Hemodialysis.hadm_id
+   AND ordertype_Hemodialysis.ordertime <= icu_detail_dialysis_first.icu_outtime
+
+-- find all ordertime before first icu_outtime for each patients with dialysis and getting into icu first time
+
+  WHERE anchor_age >= 18 AND find_dialysis.ordercategoryname LIKE '%Dialysis%'
+-- ans 1700
+  AND find_dialysis.ordercategoryname = 'Dialysis'
+-- ans 1619
+
+-- dialysis_age18 means the patients who have dialysis and age>=18
+) AS dialysis_age18 WHERE dialysis_age18.subject_id NOT IN (SELECT DISTINCT subject_id FROM `physionet-data.mimiciv_hosp.diagnoses_icd` AS icd WHERE (icd_code = '40301' OR icd_code = '40311' OR icd_code = '40391' OR icd_code = '40402' OR icd_code = '40403' OR icd_code = '40412' OR icd_code = '40413' OR icd_code = '40492' OR icd_code = '40493' OR icd_code = '5856' OR icd_code = 'I120' OR icd_code = 'I1311' OR icd_code = 'I132' OR icd_code = 'N186'))
+-- ans 1157
+
+AND (dialysis_age18.hospital_expire_flag = 0) -- 0:not die in hospital
+-- ans 470
+-- already included patients
+
+AND TIMESTAMP_DIFF(icu_outtime, ordertime, hour) < 72 -- <72 means not recover
+-- ans 160
+-- have smaller than 72hours must not recover  Otherwise, recover.
+
+--dialysis_age18.
+--AND gender = 'F' -- 'M':Male, 'F':Female
+--AND anchor_age BETWEEN 0 AND 20  -- age
+--AND race LIKE 'HISPANIC%' -- OR race LIKE 'ASIAN%' OR race LIKE 'WHITE%' OR race LIKE 'BLACK%'  -- race

@@ -1,0 +1,130 @@
+with hw2_data as (
+with hw1_data as (
+with patient_data as (WITH icd_data AS (
+  SELECT DISTINCT icd.subject_id, icd.hadm_id
+  FROM `physionet-data.mimiciv_hosp.diagnoses_icd` as icd
+  WHERE SUBSTR(icd_code, 1, 3) IN ('I26') or SUBSTR(icd_code, 1,4) IN ('4151')
+),
+
+age_data as (
+  select distinct p.subject_id, hadm_id,
+  from `physionet-data.mimiciv_derived.age` as p
+  INNER JOIN `physionet-data.mimiciv_hosp.patients` as patient
+  ON p.subject_id = patient.subject_id
+  where age >= 18
+)
+
+SELECT DISTINCT icu.subject_id, icu.hadm_id, icu.stay_id, hospital_expire_flag as label, RANK() OVER (PARTITION BY icu.subject_id ORDER BY icu_intime ASC) AS rank
+FROM `physionet-data.mimiciv_derived.icustay_detail` as icu
+INNER JOIN age_data
+ON age_data.subject_id = icu.subject_id and age_data.hadm_id = icu.hadm_id
+INNER JOIN icd_data
+ON icd_data.subject_id = icu.subject_id AND icd_data.hadm_id = icu.hadm_id
+)
+select * except(rank) from patient_data
+where rank = 1
+),
+icutime as (
+  SELECT hw1_data.subject_id, hw1_data.hadm_id, hw1_data.stay_id, 
+  DATE_ADD(intime, INTERVAL -6 HOUR) AS icu_intime_before6hr, 
+  intime AS icu_intime, 
+  DATE_ADD(intime, INTERVAL 24 HOUR) AS icu_intime_after24hr, 
+  outtime AS icu_outtime 
+  FROM hw1_data
+  INNER JOIN `physionet-data.mimiciv_icu.icustays` AS icustays ON hw1_data.subject_id = icustays.subject_id AND hw1_data.hadm_id = icustays.hadm_id AND hw1_data.stay_id = icustays.stay_id
+)
+
+
+select hw1_data.subject_id, hw1_data.hadm_id, hw1_data.stay_id, icustay_detail.hospital_expire_flag, patients.anchor_age, patients.gender, 
+  icutime.icu_intime_before6hr, 
+  icutime.icu_intime, 
+  icutime.icu_intime_after24hr, 
+  icutime.icu_outtime, 
+  urine_output.urineoutput, urine_output.charttime AS charttime_urineoutput, 
+  vasopressin_patient.vaso_itemid, --vasopressin_patient.vaso_starttime, vasopressin_patient.vaso_endtime, 
+  bg.hemoglobin, bg.glucose, bg.charttime AS charttime_bg,
+  vitalsign.resp_rate, vitalsign.heart_rate, vitalsign.charttime AS charttime_vitalsign
+from hw1_data  -- 1743
+INNER JOIN `physionet-data.mimiciv_derived.icustay_detail` AS icustay_detail -- hospital_expire_flag
+ON hw1_data.subject_id = icustay_detail.subject_id AND hw1_data.hadm_id = icustay_detail.hadm_id AND hw1_data.stay_id = icustay_detail.stay_id
+INNER JOIN icutime -- icu_intime
+ON hw1_data.subject_id = icutime.subject_id AND hw1_data.hadm_id = icutime.hadm_id AND hw1_data.stay_id = icutime.stay_id
+INNER JOIN `physionet-data.mimiciv_hosp.patients` AS patients -- gender, age
+ON hw1_data.subject_id = patients.subject_id
+LEFT JOIN ( -- urine_output
+  SELECT * FROM `physionet-data.mimiciv_derived.urine_output`
+) AS urine_output
+ON hw1_data.stay_id = urine_output.stay_id 
+  AND (urine_output.charttime BETWEEN icutime.icu_intime_before6hr AND icutime.icu_intime_after24hr)
+LEFT JOIN ( -- vasopressin
+  SELECT subject_id, hadm_id, stay_id, itemid AS vaso_itemid, starttime AS vaso_starttime, endtime AS vaso_endtime FROM `physionet-data.mimiciv_icu.inputevents` 
+  WHERE itemid = 222315 
+   -- Vasopressin:itemid=222315
+) AS vasopressin_patient -- select all patients with itemid=222315
+ON hw1_data.subject_id = vasopressin_patient.subject_id AND hw1_data.hadm_id = vasopressin_patient.hadm_id AND hw1_data.stay_id = vasopressin_patient.stay_id
+AND ((vasopressin_patient.vaso_starttime BETWEEN icutime.icu_intime AND icutime.icu_outtime)
+OR (vasopressin_patient.vaso_endtime BETWEEN icutime.icu_intime AND icutime.icu_outtime))
+LEFT JOIN (SELECT hemoglobin, glucose, subject_id, hadm_id, charttime FROM `physionet-data.mimiciv_derived.bg`) AS bg
+ON hw1_data.subject_id = bg.subject_id AND hw1_data.hadm_id = bg.hadm_id AND 
+bg.charttime BETWEEN icutime.icu_intime_before6hr AND icutime.icu_intime_after24hr
+LEFT JOIN ( -- heart rate
+  SELECT heart_rate, resp_rate, stay_id, charttime FROM `physionet-data.mimiciv_derived.vitalsign` 
+) AS vitalsign
+ ON hw1_data.stay_id = vitalsign.stay_id
+  AND (vitalsign.charttime BETWEEN icutime.icu_intime_before6hr AND icutime.icu_intime_after24hr)
+)
+
+
+SELECT 
+count(stayid_hw1_stayid), AVG(sum_urine) AS avg_urine,count(vaso_itemid) AS num_vaso_people, count(stayid_gender_data) AS num_gender_people, AVG(hemoglobin_min) AS avg_hemoglobin_min,STDDEV_SAMP(hemoglobin_min) AS std_samp_hemoglobin_min,AVG(hemoglobin_max) AS avg_hemoglobin_max,STDDEV_SAMP(hemoglobin_max) AS std_samp_hemoglobin_max, AVG(resp_rate_mean) AS avg_resp_rate_mean,STDDEV_SAMP(resp_rate_mean) AS std_samp_resp_rate_mean, AVG(glucose_max) AS avg_glucose_max,STDDEV_SAMP(glucose_max) AS std_samp_glucose_max, AVG(heart_rate_max) AS avg_heart_rate_max,STDDEV_SAMP(heart_rate_max) AS std_samp_heart_rate_max, AVG(glucose_avg) AS avg_glucose_avg,STDDEV_SAMP(glucose_avg) AS std_samp_glucose_avg, AVG(anchor_age) AS avg_anchor_age,STDDEV_SAMP(anchor_age) AS std_samp_anchor_age,
+
+FROM --hw2_data
+( 
+  -- urine output
+  select hw1_stayid.stay_id AS stayid_hw1_stayid, sum_urine, vaso_data.vaso_itemid, gender_age_data.stay_id /**/AS stayid_gender_data/**/,gender, hemoglobin_min, hemoglobin_max, resp_rate_mean, glucose_max, heart_rate_max, glucose_avg, anchor_age, hospital_expire_flag 
+  from
+  (select distinct stay_id, hospital_expire_flag from hw2_data) as hw1_stayid
+  LEFT JOIN ( -- urine
+    SELECT stay_id, SUM(urine_data_distinct_stayid.urineoutput) AS sum_urine FROM(
+      select DISTINCT stay_id, hw2_data.charttime_urineoutput, urineoutput, hospital_expire_flag 
+      from hw2_data
+    ) AS urine_data_distinct_stayid group by stay_id
+  ) AS urine_data 
+  ON hw1_stayid.stay_id = urine_data.stay_id
+  
+  LEFT JOIN( -- vaso usage
+    SELECT distinct stay_id, hw2_data.vaso_itemid FROM hw2_data 
+  ) AS vaso_data
+  ON hw1_stayid.stay_id = vaso_data.stay_id
+  
+  LEFT JOIN( -- gender
+    SELECT distinct stay_id, gender, anchor_age FROM hw2_data
+    --WHERE gender = 'F' --'M'
+  ) AS gender_age_data
+  ON hw1_stayid.stay_id = gender_age_data.stay_id
+
+  LEFT JOIN( -- min, max -- hemoglobin, glucose, heart_rate
+    SELECT distinct stay_id, MIN(hemoglobin) AS hemoglobin_min, MAX(hemoglobin) AS hemoglobin_max, MAX(glucose) AS glucose_max , MAX(heart_rate) AS heart_rate_max FROM(
+      select stay_id, hemoglobin, glucose, heart_rate from hw2_data
+    ) group by stay_id
+  ) AS hemoglobin_data
+  ON hw1_stayid.stay_id = hemoglobin_data.stay_id
+  
+  LEFT JOIN( -- resp_rate_mean
+    SELECT stay_id, AVG(resp_rate) AS resp_rate_mean FROM(
+      select distinct stay_id, resp_rate, charttime_vitalsign from hw2_data
+    )GROUP BY stay_id
+  ) AS resp_rate_mean_data 
+  ON hw1_stayid.stay_id = resp_rate_mean_data.stay_id
+
+  LEFT JOIN( -- glucose_avg
+    SELECT stay_id, AVG(glucose) AS glucose_avg FROM(
+      select distinct stay_id, glucose, charttime_bg from hw2_data
+    )GROUP BY stay_id
+  ) AS glucose_avg_data
+  ON hw1_stayid.stay_id = glucose_avg_data.stay_id
+
+  WHERE hospital_expire_flag = 1 --AND -- 0:alive
+)
+
+# done
