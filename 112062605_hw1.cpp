@@ -284,14 +284,6 @@ public:
         // single leaf addinto freq_pattern write in here.
         freq_pattern[to_string(i)] = subfptree_total_freq[i];
         //
-        cout<<"pattern freq of item:"<<i<<endl;
-        for (auto& elem: freq_pattern){
-            if(elem.second<min_support_int){
-                continue;
-            }
-            cout <<elem.first <<":";
-            cout <<fixed<< setprecision(4) <<((float)elem.second)/((float)(*DB).size())<<endl;
-        }
                 
     }
 
